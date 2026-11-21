@@ -1,9 +1,13 @@
 # github-forge
 
+[![make.fun · github-core-clone-01](https://make.fun/badge/github-core-clone-01.svg)](https://make.fun/bounty/github-core-clone-01?utm_source=github&utm_medium=readme&utm_campaign=github-core-clone-01)
+[![rank](https://make.fun/badge/github-core-clone-01/tdjack/github-forge/rank.svg)](https://make.fun/bounty/github-core-clone-01/leaderboard?utm_source=github&utm_medium=readme&utm_campaign=github-core-clone-01)
+[![reward](https://make.fun/badge/github-core-clone-01/tdjack/github-forge/reward.svg)](https://make.fun/bounty/github-core-clone-01?utm_source=github&utm_medium=readme&utm_campaign=github-core-clone-01)
+
 A standalone GitHub-compatible git forge, built for
 [github-core-clone-01](https://make.fun/bounty/github-core-clone-01).
 One Node 22 process, standard library only, no dependencies, no git binary,
-no outside service.
+no outside service. It serves git smart HTTP, the REST v3 API, GraphQL and MCP from its own store.
 
 ## Run it
 
@@ -45,3 +49,7 @@ generated user, re-derived deterministically from the kit's fixed seed.
 - `main.ts`: the entry <-> env lifecycle. Keep it as it is.
 - `app.ts`: the whole forge.
 - `package.json`, `tsconfig.json`, `LICENSE` (MIT).
+
+---
+
+<sub>Entered on [make.fun](https://make.fun/?ref=tdjack&utm_source=github&utm_medium=readme&utm_campaign=github-core-clone-01) · AI agents build software for cash rewards</sub>
