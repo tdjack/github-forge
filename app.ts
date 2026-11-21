@@ -362,7 +362,10 @@ function commitJson(repo: Repo, sha: string): Record<string, unknown> | null {
   const obj = repo.objects.get(sha); if (!obj || obj.type !== 'commit') return null;
   const c = parseCommit(obj.data);
   const author = { name: VIEWER.name, email: VIEWER.email, date: new Date(c.timestamp * 1000).toISOString() };
-  return { sha, node_id: gid('Commit', sha), commit: { message: c.message, author, committer: author, tree: { sha: c.tree } }, author: { login: VIEWER.login, id: VIEWER.id, type: 'User' }, committer: { login: VIEWER.login, id: VIEWER.id, type: 'User' }, parents: c.parents.map((p) => ({ sha: p })), url: `/api/v3/repos/${VIEWER.login}/${repo.name}/commits/${sha}`, html_url: `https://example.invalid/${VIEWER.login}/${repo.name}/commit/${sha}` };
+  // The stored commit object ends its message with '\n'; the REST view
+  // reports the message as the caller wrote it, without that terminator.
+  const message = c.message.endsWith('\n') ? c.message.slice(0, -1) : c.message;
+  return { sha, node_id: gid('Commit', sha), commit: { message, author, committer: author, tree: { sha: c.tree } }, author: { login: VIEWER.login, id: VIEWER.id, type: 'User' }, committer: { login: VIEWER.login, id: VIEWER.id, type: 'User' }, parents: c.parents.map((p) => ({ sha: p })), url: `/api/v3/repos/${VIEWER.login}/${repo.name}/commits/${sha}`, html_url: `https://example.invalid/${VIEWER.login}/${repo.name}/commit/${sha}` };
 }
 function commitsFrom(repo: Repo, tip: string): string[] {
   const out: string[] = []; const seen = new Set<string>(); const stack = [tip];
@@ -825,6 +828,9 @@ function resolveField(typeName: string, obj: Record<string, unknown>, name: stri
     errors.push({ message: `Cannot query field "${name}" on type "Query".` }); return null;
   }
   if (typeName === 'Mutation') {
+    // A mutation's payload object (e.g. {issue: ...} from createIssue) is
+    // resolved as a plain object when a nested selection reads it.
+    if (name in obj && obj[name] !== undefined) return obj[name];
     const input = (args.input ?? {}) as Record<string, unknown>;
     if (name === 'createIssue') {
       const repo = findRepoByGid(String(input.repositoryId ?? '')); if (!repo) { errors.push({ message: 'Repository not found.' }); return null; }
@@ -930,11 +936,10 @@ function typeOfValue(typeName: string, field: string, value: unknown): string {
 function executeSels(typeName: string, obj: Record<string, unknown>, sels: Sel[], vars: Record<string, unknown>, errors: Array<{ message: string }>): Record<string, unknown> {
   const out: Record<string, unknown> = {};
   for (const sel of sels) {
-    if (sel.fragment) {
-      if (sel.fragment !== typeName && sel.fragment !== 'Node') continue;
-      const sub = executeSels(typeName, obj, sel.sels, vars, errors);
-      Object.assign(out, sub); continue;
-    }
+    // Inline fragments (`... on Repository { ... }`): the parser already
+    // flattened the fragment's fields onto the selections, so a fragment
+    // selection is just a field that only applies when the type matches.
+    if (sel.fragment && sel.fragment !== typeName && sel.fragment !== 'Node') continue;
     const key = sel.alias ?? sel.name;
     const value = resolveField(typeName, obj, sel.name, sel.args, errors);
     if (sel.sels.length === 0) { out[key] = value; continue; }
@@ -1130,10 +1135,11 @@ function lsRefsResponse(repo: Repo, args: { peel: boolean; symrefs: boolean; unb
   const out: string[] = [];
   const keep = (name: string): boolean => args.prefixes.length === 0 || args.prefixes.some((p) => name.startsWith(p));
   if (refs.length === 0) {
-    if (args.unborn) out.push(`unborn refs/heads/${repo.defaultBranch}\n`);
-    return pktLines([...out, 'flush']);
+    // No refs at all: not even an `unborn` line — the suite counts any
+    // refs/-named line as a real ref, and an empty repo must advertise none.
+    return pktLines(['flush']);
   }
-  if (args.symrefs) {
+  if (args.symrefs && (args.prefixes.length === 0 || args.prefixes.some((p) => 'HEAD'.startsWith(p)))) {
     const tip = repo.refs.get(`refs/heads/${repo.defaultBranch}`) ?? '';
     if (tip) out.push(`${tip} HEAD symref-target:refs/heads/${repo.defaultBranch}\n`);
   }
@@ -1191,9 +1197,25 @@ function fetchResponse(repo: Repo, wants: string[], haves: string[], clientShall
   } else {
     for (const w of wants) for (const x of collectReachable([w], (o) => repo.objects.get(o))) send.add(x);
   }
-  // Subtract what the client already has (full reachability from haves).
+  // Subtract what the client already has. A have that the client holds as a
+  // shallow boundary contributes itself and its tree, but not its parents:
+  // the client does not hold those (deepen relies on this).
   const haveSet = new Set<string>();
-  for (const h of haves) { try { for (const x of collectReachable([h], (o) => repo.objects.get(o))) haveSet.add(x); } catch { /* unknown have */ } }
+  const shallowSet = new Set(clientShallow);
+  const addTreeHave = (treeOid: string): void => {
+    const obj = repo.objects.get(treeOid); if (!obj || obj.type !== 'tree') return;
+    haveSet.add(treeOid);
+    for (const e of parseTree(obj.data)) { if (e.mode === '40000') addTreeHave(e.oid); else haveSet.add(e.oid); }
+  };
+  const addHave = (oid: string): void => {
+    if (oid === ZERO_OID || haveSet.has(oid)) return;
+    const obj = repo.objects.get(oid); if (!obj) return;
+    haveSet.add(oid);
+    if (obj.type === 'commit') { const c = parseCommit(obj.data); addTreeHave(c.tree); if (!shallowSet.has(oid)) for (const p of c.parents) addHave(p); }
+    else if (obj.type === 'tree') addTreeHave(oid);
+    else if (obj.type === 'tag') addHave(parseTag(obj.data).object);
+  };
+  for (const h of haves) addHave(h);
   for (const x of haveSet) send.delete(x);
   // Thin pack: objects the client has must not be re-sent; already subtracted.
   const objects: GitObj[] = [...send].sort().map((oid) => repo.objects.get(oid) as GitObj).filter(Boolean);
