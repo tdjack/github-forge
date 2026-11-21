@@ -30,7 +30,8 @@ function mix64(v: bigint): bigint {
 class Rng {
   #s: bigint;
   constructor(seed: bigint) { const m = seed & U64; this.#s = m === 0n ? 0x6a09e667f3bcc909n : m; }
-  nextU32(): number { let x = this.#s; x = (x ^ (x >> 12n)) & U64; x = (x ^ (x << 25n)) & U64; x = (x ^ (x >> 27n)) & U64; this.#s = x; return Number((x * 0x2545f4914f6cdd1dn) & U64 >> 32n); }
+  nextU64(): bigint { let x = this.#s; x = (x ^ (x >> 12n)) & U64; x = (x ^ (x << 25n)) & U64; x = (x ^ (x >> 27n)) & U64; this.#s = x; return (x * 0x2545f4914f6cdd1dn) & U64; }
+  nextU32(): number { return Number(this.nextU64() >> 32n); }
   nextInt(max: number): number { if (max === 1) return 0; const range = 4294967296; const limit = range - (range % max); for (;;) { const v = this.nextU32(); if (v < limit) return v % max; } }
   pick<T>(items: readonly T[]): T { return items[this.nextInt(items.length)] as T; }
 }
